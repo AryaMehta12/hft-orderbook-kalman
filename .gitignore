@@ -1,0 +1,21 @@
+# Build artifacts
+cpp/build/
+*.o
+*.obj
+*.exe
+*.out
+
+# Generated data (per Section 5 — data/ is gitignored)
+data/*.csv
+
+# Python
+python/__pycache__/
+python/.ipynb_checkpoints/
+*.pyc
+
+# VS Code
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
