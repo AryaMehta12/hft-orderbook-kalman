@@ -62,6 +62,9 @@ The user explicitly evaluated and rejected:
 - **C++ standard**: C++17, set via `CMAKE_CXX_STANDARD 17` in `cpp/CMakeLists.txt`. [Added Session 1: not specified in original doc; chosen since GCC 16.1.0 (MinGW-w64/UCRT64) supports it fully and nothing in the locked design needs anything later.]
 - **Order.timestamp semantics**: represents simulated elapsed nanoseconds since simulation start (generator accumulates random inter-arrival gaps), NOT wall-clock time and NOT a plain sequence counter. [Added Session 1: needed for Day 2's "resample irregular event timestamps to uniform 1ms grid" step to be well-defined — a plain counter carries ordering but no real time axis to bucket by. User confirmed.]
 - **Order struct stores price and side redundantly** alongside the map key/bucket they correspond to (price is also the `std::map` key; side determines which top-level map — bids or asks). Safe and will not drift out of sync because there is no MODIFY event type — price and side are immutable after order construction. [Added Session 1: simplifies call sites, e.g. `matchOrder` and `--verbose` printing can read `order.price`/`order.side` directly without threading map context through. If MODIFY is ever added later (it is currently out of scope), a price-changing modify MUST be implemented as cancel-then-reinsert at the new price, never as an in-place mutation of `Order::price` — an in-place mutation would desync the struct from its actual position in the book, since the order would still physically sit in the old price level's list.]
+- **PriceLevel lives in its own header** (`cpp/include/PriceLevel.h`), not nested inside `OrderBook.h`. [Added Session 2: user preference for readability and file splitting. PriceLevel is owned by OrderBook (only OrderBook constructs or mutates one) but lives in its own translation unit.]
+- **No OrderType field on the Order struct**; instead, OrderBook exposes two public methods: `submitLimitOrder(Order)` and `submitMarketOrder(Order)`. The method called determines the order's behavior (rest-on-no-fill vs IOC discard). Internally both delegate to a private `matchOrder` helper that takes a `bool stop_on_price` flag (true → LIMIT semantics, false → MARKET semantics). [Added Session 2: user preferred not to retrofit OrderType onto the already-saved Order struct. The shared private helper avoids code duplication between the two public entry points; the duplication that remains is only in the `submit*Order` methods themselves and in the BUY/SELL branches of `restLimitOrder` / `removeOrderAt` (acceptable since the two maps have different comparator types).]
+- **PriceLevel caches `total_quantity`** as a `uint64_t` field, maintained by OrderBook on every add/cancel/fill. Avoids O(n_at_level) sum walks when matching needs to know "is there enough liquidity at this level." Invariant `total_quantity == sum of orders' quantities` is OrderBook's responsibility. [Added Session 2: confirmed during PriceLevel walkthrough.]
 
 ### Synthetic event generator
 - **True price**: slow Brownian motion (small step variance per event). Specific variance values deferred to Day 1 Block 4; tune so the price drifts visibly over 100K events but doesn't go negative.
@@ -80,13 +83,14 @@ The user explicitly evaluated and rejected:
 - **Tests**: variance reduction, MSE vs ground truth, short-horizon predictive MSE, residual whiteness check.
 
 ### Data structures (C++)
-- **Price levels**: `std::map<int64_t, PriceLevel, std::greater<>>` for bids (descending), `std::map<int64_t, PriceLevel, std::less<>>` for asks (ascending). Each `PriceLevel` holds a FIFO queue of orders at that price.
-- **Order lookup**: `std::unordered_map<uint64_t, /* iterator into price-level deque */>` for O(1) cancels.
+- **Price levels**: `std::map<int64_t, PriceLevel, std::greater<int64_t>>` for bids (descending), `std::map<int64_t, PriceLevel, std::less<int64_t>>` for asks (ascending). Each `PriceLevel` holds a FIFO `std::list<Order>` queue plus a cached `total_quantity`.
+- **Order lookup**: `std::unordered_map<uint64_t, OrderLocator>` for O(1) cancels. `OrderLocator` stores `(side, price, list iterator)` so cancels can jump directly to the order's node without searching.
 - **Matching**: price-time priority. Walk best price level, FIFO within level, walk deeper levels if liquidity insufficient.
 
 ### Testing approach
 - Lightweight, no external test framework (no gtest / Catch2). Use plain `assert()` macros in `tests/test_orderbook.cpp`, compiled as a separate executable target in CMakeLists.
 - Tests cover: add limit order to empty book, add crossing limit order (immediate trade), full match, partial fill, cancel, market order with insufficient liquidity, walking the book across price levels.
+- Block 2 tests cover only the structural parts (add, cancel, query, multi-order, empty handling) since `matchOrder` is a stub. Matching-dependent tests are added in Block 3.
 - Not exhaustive — just enough to trust each piece before composing them.
 
 ### Build and tooling
@@ -125,8 +129,9 @@ hft-orderbook-kalman/
 ├── cpp/
 │   ├── CMakeLists.txt
 │   ├── include/
-│   │   ├── Order.h             ← Order, Trade, Event structs
-│   │   ├── OrderBook.h
+│   │   ├── Order.h             ← Order, Trade, Side
+│   │   ├── PriceLevel.h        ← PriceLevel struct (FIFO queue per price)
+│   │   ├── OrderBook.h         ← OrderBook class (matching engine)
 │   │   └── EventGenerator.h
 │   ├── src/
 │   │   ├── OrderBook.cpp
@@ -162,7 +167,9 @@ hft-orderbook-kalman/
 
 **End-of-Day-1 deliverable:** C++ engine compiles, runs, produces sane `midprices.csv` and `trades.csv`, benchmark prints throughput and latency.
 
-[Day 1 note: Block 1 ran significantly over 2h due to toolchain setup — original MinGW.org GCC 6.3.0 install was unusable (2016, 32-bit, C++14-only) and had to be replaced with MinGW-w64 GCC 16.1.0 via MSYS2, including a PATH conflict between the two installs. CMake also had to be installed from scratch. This consumed most of Session 1; actual Block 2 (struct definitions) has not yet started.]
+[Day 1 note: Block 1 ran significantly over 2h due to toolchain setup — original MinGW.org GCC 6.3.0 install was unusable (2016, 32-bit, C++14-only) and had to be replaced with MinGW-w64 GCC 16.1.0 via MSYS2, including a PATH conflict between the two installs. CMake also had to be installed from scratch. This consumed most of Session 1.]
+
+[Day 1 note: Block 2 completed across sessions 2-3. All three headers (Order.h, PriceLevel.h, OrderBook.h) written and walked through. OrderBook.cpp written with full method-by-method walkthrough. matchOrder is a stub returning incoming.quantity unchanged — real body deferred to Block 3 per Rule 3. CMakeLists.txt configured for C++17 Release builds with warnings enabled. test_orderbook.cpp written with 6 sanity tests covering structural correctness (no matching-dependent tests yet). Full build verified on System B; all 6 tests pass. Two design clarifications surfaced during walkthrough and were locked in Section 4: PriceLevel split into own header, two-method submit API instead of OrderType-on-struct.]
 
 ### Day 2 (13 hours) — Kalman Filter + Analysis
 - **Block 1 (2h):** Kalman math on paper. Predict, update, gain derivation. Hand-work a tiny example.
@@ -194,13 +201,13 @@ Pick at most one.
 
 ```
 DAY:                  1
-BLOCK:                Block 2 — Order/PriceLevel/OrderBook struct definitions
-CURRENT STATUS:       Order.h complete (Order, Trade structs, Side enum). About to write PriceLevel struct.
-LAST COMPLETED:       Order.h written, explained in full to user (enum class mechanics, fixed-point price rationale, redundant price/side storage rationale, timestamp semantics), saved locally by user.
-NEXT IMMEDIATE STEP:  Write PriceLevel struct (std::list<Order> FIFO queue per price level), pending one open decision: whether PriceLevel caches a running totalQuantity or computes it on demand by summing the list (asked, not yet answered as of this update). Then OrderBook class skeleton (method declarations only, matchOrder body excluded per Rule 3).
+BLOCK:                Block 2 — COMPLETE
+CURRENT STATUS:       Order book infrastructure done. Headers + OrderBook.cpp + CMakeLists + 6 passing tests on System B. matchOrder is a stub (returns incoming.quantity unchanged) — to be implemented by user in Block 3.
+LAST COMPLETED:       test_orderbook.cpp written and walked through, CMakeLists updated to include test target, project builds clean, all 6 tests pass.
+NEXT IMMEDIATE STEP:  Block 3 — write matchOrder body (USER WRITES THIS per Rule 3). Extend tests to cover crossing limits, partial fills, walking the book, market orders that actually trade.
 KNOWN ISSUES:         None.
-DEFERRED:             None.
-LAST PUSH:            not yet pushed (this CONTEXT.md update plus cpp/include/Order.h need to be committed)
+DEFERRED:             EventGenerator + main.cpp (Block 4). benchmark.cpp (Block 5).
+LAST PUSH:            pending — final Block 2 commit (.gitignore + CMakeLists + test_orderbook.cpp + CONTEXT.md)
 ```
 
 **Update format:** Overwrite the values in place. Don't append to the file. Don't add commentary outside the block. Just keep this snapshot current.

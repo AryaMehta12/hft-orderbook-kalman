@@ -1,0 +1,70 @@
+{
+	"configurations" : 
+	[
+		{
+			"abstractTargets" : [],
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-f040eec181a89de70dbe.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.16"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "orderbook",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "orderbook_core::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-orderbook_core-Debug-eb443e79de25eb53db79.json",
+					"name" : "orderbook_core",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "test_orderbook::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-test_orderbook-Debug-c978642540e8a7f50d0d.json",
+					"name" : "test_orderbook",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Users/aryam/OneDrive/Documents/cOdeR69/projects/hft-orderbook-kalman/build",
+		"source" : "C:/Users/aryam/OneDrive/Documents/cOdeR69/projects/hft-orderbook-kalman/cpp"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 10
+	}
+}
