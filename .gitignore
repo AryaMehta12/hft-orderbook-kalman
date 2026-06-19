@@ -1,5 +1,5 @@
 # Build artifacts
-cpp/build/
+build/
 *.o
 *.obj
 *.exe
