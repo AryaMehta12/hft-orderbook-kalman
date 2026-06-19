@@ -58,6 +58,10 @@ The user explicitly evaluated and rejected:
 - **Benchmark binary**: separate from main, measures throughput and per-event latency (p50/p99/p99.9).
 - **RNG**: seeded with fixed default (`42`) for reproducibility, overridable via `--seed <int>` CLI flag.
 - **Code layout convention**: declarations in `.h` files, definitions in `.cpp` files. No inline implementations in headers except for templates and trivial getters.
+- **PriceLevel container**: `std::list<Order>` for the FIFO queue at each price level (not `std::queue`, not `std::deque`) — required so the order-lookup `unordered_map` can store stable iterators for O(1) cancel-by-ID anywhere in the queue, not just at the ends. [Added Session 1: resolved an inconsistency in the original doc text, which named `std::queue` in one place and "iterator into price-level deque" in another — `std::queue` doesn't expose erase-by-iterator, so it was incompatible with the stated O(1) cancel design.]
+- **C++ standard**: C++17, set via `CMAKE_CXX_STANDARD 17` in `cpp/CMakeLists.txt`. [Added Session 1: not specified in original doc; chosen since GCC 16.1.0 (MinGW-w64/UCRT64) supports it fully and nothing in the locked design needs anything later.]
+- **Order.timestamp semantics**: represents simulated elapsed nanoseconds since simulation start (generator accumulates random inter-arrival gaps), NOT wall-clock time and NOT a plain sequence counter. [Added Session 1: needed for Day 2's "resample irregular event timestamps to uniform 1ms grid" step to be well-defined — a plain counter carries ordering but no real time axis to bucket by. User confirmed.]
+- **Order struct stores price and side redundantly** alongside the map key/bucket they correspond to (price is also the `std::map` key; side determines which top-level map — bids or asks). Safe and will not drift out of sync because there is no MODIFY event type — price and side are immutable after order construction. [Added Session 1: simplifies call sites, e.g. `matchOrder` and `--verbose` printing can read `order.price`/`order.side` directly without threading map context through. If MODIFY is ever added later (it is currently out of scope), a price-changing modify MUST be implemented as cancel-then-reinsert at the new price, never as an in-place mutation of `Order::price` — an in-place mutation would desync the struct from its actual position in the book, since the order would still physically sit in the old price level's list.]
 
 ### Synthetic event generator
 - **True price**: slow Brownian motion (small step variance per event). Specific variance values deferred to Day 1 Block 4; tune so the price drifts visibly over 100K events but doesn't go negative.
@@ -158,6 +162,8 @@ hft-orderbook-kalman/
 
 **End-of-Day-1 deliverable:** C++ engine compiles, runs, produces sane `midprices.csv` and `trades.csv`, benchmark prints throughput and latency.
 
+[Day 1 note: Block 1 ran significantly over 2h due to toolchain setup — original MinGW.org GCC 6.3.0 install was unusable (2016, 32-bit, C++14-only) and had to be replaced with MinGW-w64 GCC 16.1.0 via MSYS2, including a PATH conflict between the two installs. CMake also had to be installed from scratch. This consumed most of Session 1; actual Block 2 (struct definitions) has not yet started.]
+
 ### Day 2 (13 hours) — Kalman Filter + Analysis
 - **Block 1 (2h):** Kalman math on paper. Predict, update, gain derivation. Hand-work a tiny example.
 - **Block 2 (2h):** Implement filter in NumPy. Unit test with known input/output.
@@ -187,14 +193,14 @@ Pick at most one.
 ## 7. STATUS — UPDATE THIS AS YOU PROGRESS
 
 ```
-DAY:                  [1 / 2 / 3]
-BLOCK:                [block number and name, e.g., "Block 3 — matching engine"]
-CURRENT STATUS:       [one sentence — what's happening right now]
-LAST COMPLETED:       [one sentence — what just got finished]
-NEXT IMMEDIATE STEP:  [one sentence — exact next action]
-KNOWN ISSUES:         [bugs / blockers, or "None"]
-DEFERRED:             [things pushed to later, or "None"]
-LAST PUSH:            [timestamp or "not yet pushed"]
+DAY:                  1
+BLOCK:                Block 2 — Order/PriceLevel/OrderBook struct definitions
+CURRENT STATUS:       Order.h complete (Order, Trade structs, Side enum). About to write PriceLevel struct.
+LAST COMPLETED:       Order.h written, explained in full to user (enum class mechanics, fixed-point price rationale, redundant price/side storage rationale, timestamp semantics), saved locally by user.
+NEXT IMMEDIATE STEP:  Write PriceLevel struct (std::list<Order> FIFO queue per price level), pending one open decision: whether PriceLevel caches a running totalQuantity or computes it on demand by summing the list (asked, not yet answered as of this update). Then OrderBook class skeleton (method declarations only, matchOrder body excluded per Rule 3).
+KNOWN ISSUES:         None.
+DEFERRED:             None.
+LAST PUSH:            not yet pushed (this CONTEXT.md update plus cpp/include/Order.h need to be committed)
 ```
 
 **Update format:** Overwrite the values in place. Don't append to the file. Don't add commentary outside the block. Just keep this snapshot current.
