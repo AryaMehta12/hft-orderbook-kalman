@@ -1,4 +1,6 @@
 file(REMOVE_RECURSE
+  "CMakeFiles/orderbook_core.dir/src/EventGenerator.cpp.obj"
+  "CMakeFiles/orderbook_core.dir/src/EventGenerator.cpp.obj.d"
   "CMakeFiles/orderbook_core.dir/src/OrderBook.cpp.obj"
   "CMakeFiles/orderbook_core.dir/src/OrderBook.cpp.obj.d"
   "liborderbook_core.a"

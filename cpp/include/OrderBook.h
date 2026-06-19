@@ -65,6 +65,10 @@ public:
     // Total resting orders across both sides. O(1).
     size_t restingOrderCount() const { return order_index_.size(); }
 
+    bool isResting(uint64_t order_id) const{
+        return order_index_.find(order_id)!=order_index_.end();
+    }
+
     // Toggle per-event console output for debugging. Off by default.
     void setVerbose(bool v) { verbose_ = v; }
 

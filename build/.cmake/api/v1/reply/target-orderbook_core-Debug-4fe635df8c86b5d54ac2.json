@@ -1,11 +1,9 @@
 {
+	"archive" : {},
 	"artifacts" : 
 	[
 		{
-			"path" : "test_orderbook.exe"
-		},
-		{
-			"path" : "test_orderbook.pdb"
+			"path" : "liborderbook_core.a"
 		}
 	],
 	"backtrace" : 1,
@@ -13,8 +11,7 @@
 	{
 		"commands" : 
 		[
-			"add_executable",
-			"target_link_libraries",
+			"add_library",
 			"add_compile_options",
 			"include_directories"
 		],
@@ -36,19 +33,13 @@
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 35,
+				"line" : 13,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 13,
-				"parent" : 0
-			},
-			{
-				"command" : 3,
-				"file" : 0,
-				"line" : 23,
+				"line" : 29,
 				"parent" : 0
 			}
 		]
@@ -58,13 +49,6 @@
 		"major" : 2,
 		"minor" : 10
 	},
-	"compileDependencies" : 
-	[
-		{
-			"backtrace" : 2,
-			"id" : "orderbook_core::@6890427a1f51a3e7e1df"
-		}
-	],
 	"compileGroups" : 
 	[
 		{
@@ -74,22 +58,22 @@
 					"fragment" : "-g -std=c++17"
 				},
 				{
-					"backtrace" : 3,
+					"backtrace" : 2,
 					"fragment" : "-Wall"
 				},
 				{
-					"backtrace" : 3,
+					"backtrace" : 2,
 					"fragment" : "-Wextra"
 				},
 				{
-					"backtrace" : 3,
+					"backtrace" : 2,
 					"fragment" : "-Wpedantic"
 				}
 			],
 			"includes" : 
 			[
 				{
-					"backtrace" : 4,
+					"backtrace" : 3,
 					"path" : "C:/Users/aryam/OneDrive/Documents/cOdeR69/projects/hft-orderbook-kalman/cpp/include"
 				}
 			],
@@ -104,47 +88,14 @@
 			},
 			"sourceIndexes" : 
 			[
-				0
+				0,
+				1
 			]
 		}
 	],
-	"dependencies" : 
-	[
-		{
-			"backtrace" : 2,
-			"id" : "orderbook_core::@6890427a1f51a3e7e1df"
-		}
-	],
-	"id" : "test_orderbook::@6890427a1f51a3e7e1df",
-	"link" : 
-	{
-		"commandFragments" : 
-		[
-			{
-				"fragment" : "-g",
-				"role" : "flags"
-			},
-			{
-				"backtrace" : 2,
-				"fragment" : "liborderbook_core.a",
-				"role" : "libraries"
-			},
-			{
-				"fragment" : "-lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32",
-				"role" : "libraries"
-			}
-		],
-		"language" : "CXX"
-	},
-	"linkLibraries" : 
-	[
-		{
-			"backtrace" : 2,
-			"id" : "orderbook_core::@6890427a1f51a3e7e1df"
-		}
-	],
-	"name" : "test_orderbook",
-	"nameOnDisk" : "test_orderbook.exe",
+	"id" : "orderbook_core::@6890427a1f51a3e7e1df",
+	"name" : "orderbook_core",
+	"nameOnDisk" : "liborderbook_core.a",
 	"paths" : 
 	{
 		"build" : ".",
@@ -156,7 +107,8 @@
 			"name" : "Source Files",
 			"sourceIndexes" : 
 			[
-				0
+				0,
+				1
 			]
 		}
 	],
@@ -165,9 +117,15 @@
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "tests/test_orderbook.cpp",
+			"path" : "src/OrderBook.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "src/EventGenerator.cpp",
 			"sourceGroupIndex" : 0
 		}
 	],
-	"type" : "EXECUTABLE"
+	"type" : "STATIC_LIBRARY"
 }

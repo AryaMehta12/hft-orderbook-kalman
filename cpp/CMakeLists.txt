@@ -14,24 +14,32 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
 endif()
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/OrderBook.cpp")
-    message(FATAL_ERROR "Missing src/OrderBook.cpp — did you save it to cpp/src/?")
+    message(FATAL_ERROR "Missing src/OrderBook.cpp")
+endif()
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/EventGenerator.cpp")
+    message(FATAL_ERROR "Missing src/EventGenerator.cpp")
+endif()
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+    message(FATAL_ERROR "Missing src/main.cpp")
 endif()
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_orderbook.cpp")
-    message(FATAL_ERROR "Missing tests/test_orderbook.cpp — did you save it to cpp/tests/?")
+    message(FATAL_ERROR "Missing tests/test_orderbook.cpp")
 endif()
 
 include_directories(include)
 
-# Core library: shared compiled code reused by tests and (later) by
-# main.cpp / benchmark.cpp.
+# Core library: OrderBook + EventGenerator. Shared by main, benchmark, tests.
 add_library(orderbook_core STATIC
     src/OrderBook.cpp
+    src/EventGenerator.cpp
 )
 
-# Sanity test executable for Block 2.
-add_executable(test_orderbook
-    tests/test_orderbook.cpp
-)
+# Main simulation executable.
+add_executable(orderbook src/main.cpp)
+target_link_libraries(orderbook PRIVATE orderbook_core)
+
+# Sanity tests.
+add_executable(test_orderbook tests/test_orderbook.cpp)
 target_link_libraries(test_orderbook PRIVATE orderbook_core)
 
 enable_testing()

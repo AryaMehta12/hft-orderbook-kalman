@@ -139,6 +139,19 @@ orderbook_core/fast:
 .PHONY : orderbook_core/fast
 
 #=============================================================================
+# Target rules for targets named orderbook
+
+# Build rule for target.
+orderbook: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 orderbook
+.PHONY : orderbook
+
+# fast build rule for target.
+orderbook/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook.dir\build.make CMakeFiles/orderbook.dir/build
+.PHONY : orderbook/fast
+
+#=============================================================================
 # Target rules for targets named test_orderbook
 
 # Build rule for target.
@@ -150,6 +163,30 @@ test_orderbook: cmake_check_build_system
 test_orderbook/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\test_orderbook.dir\build.make CMakeFiles/test_orderbook.dir/build
 .PHONY : test_orderbook/fast
+
+src/EventGenerator.obj: src/EventGenerator.cpp.obj
+.PHONY : src/EventGenerator.obj
+
+# target to build an object file
+src/EventGenerator.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook_core.dir\build.make CMakeFiles/orderbook_core.dir/src/EventGenerator.cpp.obj
+.PHONY : src/EventGenerator.cpp.obj
+
+src/EventGenerator.i: src/EventGenerator.cpp.i
+.PHONY : src/EventGenerator.i
+
+# target to preprocess a source file
+src/EventGenerator.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook_core.dir\build.make CMakeFiles/orderbook_core.dir/src/EventGenerator.cpp.i
+.PHONY : src/EventGenerator.cpp.i
+
+src/EventGenerator.s: src/EventGenerator.cpp.s
+.PHONY : src/EventGenerator.s
+
+# target to generate assembly for a file
+src/EventGenerator.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook_core.dir\build.make CMakeFiles/orderbook_core.dir/src/EventGenerator.cpp.s
+.PHONY : src/EventGenerator.cpp.s
 
 src/OrderBook.obj: src/OrderBook.cpp.obj
 .PHONY : src/OrderBook.obj
@@ -174,6 +211,30 @@ src/OrderBook.s: src/OrderBook.cpp.s
 src/OrderBook.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook_core.dir\build.make CMakeFiles/orderbook_core.dir/src/OrderBook.cpp.s
 .PHONY : src/OrderBook.cpp.s
+
+src/main.obj: src/main.cpp.obj
+.PHONY : src/main.obj
+
+# target to build an object file
+src/main.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook.dir\build.make CMakeFiles/orderbook.dir/src/main.cpp.obj
+.PHONY : src/main.cpp.obj
+
+src/main.i: src/main.cpp.i
+.PHONY : src/main.i
+
+# target to preprocess a source file
+src/main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook.dir\build.make CMakeFiles/orderbook.dir/src/main.cpp.i
+.PHONY : src/main.cpp.i
+
+src/main.s: src/main.cpp.s
+.PHONY : src/main.s
+
+# target to generate assembly for a file
+src/main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook.dir\build.make CMakeFiles/orderbook.dir/src/main.cpp.s
+.PHONY : src/main.cpp.s
 
 tests/test_orderbook.obj: tests/test_orderbook.cpp.obj
 .PHONY : tests/test_orderbook.obj
@@ -208,11 +269,18 @@ help:
 	@echo ... edit_cache
 	@echo ... rebuild_cache
 	@echo ... test
+	@echo ... orderbook
 	@echo ... orderbook_core
 	@echo ... test_orderbook
+	@echo ... src/EventGenerator.obj
+	@echo ... src/EventGenerator.i
+	@echo ... src/EventGenerator.s
 	@echo ... src/OrderBook.obj
 	@echo ... src/OrderBook.i
 	@echo ... src/OrderBook.s
+	@echo ... src/main.obj
+	@echo ... src/main.i
+	@echo ... src/main.s
 	@echo ... tests/test_orderbook.obj
 	@echo ... tests/test_orderbook.i
 	@echo ... tests/test_orderbook.s
