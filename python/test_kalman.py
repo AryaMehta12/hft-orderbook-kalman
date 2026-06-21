@@ -4,7 +4,7 @@ Run from python/ directory: `python test_kalman.py`
 """
 
 import numpy as np
-from kalman import predict, update, run_filter
+from python.kalman import predict, update, run_filter
 
 
 def assert_close(actual, expected, tol=1e-9, label=""):
