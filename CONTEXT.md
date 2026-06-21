@@ -58,20 +58,25 @@ The user explicitly evaluated and rejected:
 - **Benchmark binary**: separate from main, measures throughput and per-event latency (p50/p99/p99.9).
 - **RNG**: seeded with fixed default (`42`) for reproducibility, overridable via `--seed <int>` CLI flag.
 - **Code layout convention**: declarations in `.h` files, definitions in `.cpp` files. No inline implementations in headers except for templates and trivial getters.
-- **PriceLevel container**: `std::list<Order>` for the FIFO queue at each price level (not `std::queue`, not `std::deque`) — required so the order-lookup `unordered_map` can store stable iterators for O(1) cancel-by-ID anywhere in the queue, not just at the ends. [Added Session 1: resolved an inconsistency in the original doc text, which named `std::queue` in one place and "iterator into price-level deque" in another — `std::queue` doesn't expose erase-by-iterator, so it was incompatible with the stated O(1) cancel design.]
-- **C++ standard**: C++17, set via `CMAKE_CXX_STANDARD 17` in `cpp/CMakeLists.txt`. [Added Session 1: not specified in original doc; chosen since GCC 16.1.0 (MinGW-w64/UCRT64) supports it fully and nothing in the locked design needs anything later.]
-- **Order.timestamp semantics**: represents simulated elapsed nanoseconds since simulation start (generator accumulates random inter-arrival gaps), NOT wall-clock time and NOT a plain sequence counter. [Added Session 1: needed for Day 2's "resample irregular event timestamps to uniform 1ms grid" step to be well-defined — a plain counter carries ordering but no real time axis to bucket by. User confirmed.]
-- **Order struct stores price and side redundantly** alongside the map key/bucket they correspond to (price is also the `std::map` key; side determines which top-level map — bids or asks). Safe and will not drift out of sync because there is no MODIFY event type — price and side are immutable after order construction. [Added Session 1: simplifies call sites, e.g. `matchOrder` and `--verbose` printing can read `order.price`/`order.side` directly without threading map context through. If MODIFY is ever added later (it is currently out of scope), a price-changing modify MUST be implemented as cancel-then-reinsert at the new price, never as an in-place mutation of `Order::price` — an in-place mutation would desync the struct from its actual position in the book, since the order would still physically sit in the old price level's list.]
-- **PriceLevel lives in its own header** (`cpp/include/PriceLevel.h`), not nested inside `OrderBook.h`. [Added Session 2: user preference for readability and file splitting. PriceLevel is owned by OrderBook (only OrderBook constructs or mutates one) but lives in its own translation unit.]
-- **No OrderType field on the Order struct**; instead, OrderBook exposes two public methods: `submitLimitOrder(Order)` and `submitMarketOrder(Order)`. The method called determines the order's behavior (rest-on-no-fill vs IOC discard). Internally both delegate to a private `matchOrder` helper that takes a `bool stop_on_price` flag (true → LIMIT semantics, false → MARKET semantics). [Added Session 2: user preferred not to retrofit OrderType onto the already-saved Order struct. The shared private helper avoids code duplication between the two public entry points; the duplication that remains is only in the `submit*Order` methods themselves and in the BUY/SELL branches of `restLimitOrder` / `removeOrderAt` (acceptable since the two maps have different comparator types).]
-- **PriceLevel caches `total_quantity`** as a `uint64_t` field, maintained by OrderBook on every add/cancel/fill. Avoids O(n_at_level) sum walks when matching needs to know "is there enough liquidity at this level." Invariant `total_quantity == sum of orders' quantities` is OrderBook's responsibility. [Added Session 2: confirmed during PriceLevel walkthrough.]
+- **PriceLevel container**: `std::list<Order>` for the FIFO queue at each price level (not `std::queue`, not `std::deque`) — required so the order-lookup `unordered_map` can store stable iterators for O(1) cancel-by-ID anywhere in the queue, not just at the ends. [Added Session 1.]
+- **C++ standard**: C++17, set via `CMAKE_CXX_STANDARD 17`. [Added Session 1.]
+- **Order.timestamp semantics**: simulated elapsed nanoseconds since simulation start (generator accumulates random inter-arrival gaps), NOT wall-clock and NOT a plain counter. Needed for Day 2's "resample to uniform 1ms grid" step. [Added Session 1.]
+- **Order struct stores price and side redundantly** alongside the map key/bucket. Safe because no MODIFY event type — price and side immutable after construction. If MODIFY ever added later, must be cancel-then-reinsert at the new price, never in-place mutation. [Added Session 1.]
+- **PriceLevel lives in its own header** (`cpp/include/PriceLevel.h`), not nested inside `OrderBook.h`. [Added Session 2.]
+- **No OrderType field on Order**; instead, OrderBook exposes two public methods `submitLimitOrder(Order)` and `submitMarketOrder(Order)`. Internally both delegate to private `matchOrder(Order&, bool stop_on_price)`. [Added Session 2.]
+- **PriceLevel caches `total_quantity`**, maintained by OrderBook on every add/cancel/fill. Avoids O(n_at_level) sum walks. [Added Session 2.]
+- **`OrderBook::isResting(uint64_t)` public inline accessor** — checks if an order id is currently in `order_index_`. Added to fix a partial-fill bug in main.cpp's resting-id tracking (trades for partially-consumed orders would otherwise incorrectly desync the tracker). [Added Session 3.]
+- **Benchmark uses live event generation, not pre-generation**. Pre-generation caused the generator's cancel-target tracker to drift from book state, producing near-zero effective cancel rate and book bloating to 33K resting orders. Live generation in the timed loop with selective bracketing (only the book op is bracketed for per-event latency, gen.next() runs in the loop but outside the brackets) restores correctness. [Added Session 5.]
+- **Benchmark reports both book-only and wall throughput**. Book-only = events / sum(per-event latencies) (engine's intrinsic speed); wall = events / total loop time (full pipeline including generator). [Added Session 5.]
 
 ### Synthetic event generator
-- **True price**: slow Brownian motion (small step variance per event). Specific variance values deferred to Day 1 Block 4; tune so the price drifts visibly over 100K events but doesn't go negative.
-- **Event mix**: 52% ADD_LIMIT, 40% CANCEL, 8% ADD_MARKET (calibrated to real microstructure).
-- **Price clustering**: limit orders concentrated near touch, Gaussian-ish density falling off with distance from mid. Within ±10 ticks dense; sparse beyond.
-- **Quantity distribution**: small integers (1–500 shares) with skew toward small sizes.
-- **Default events**: 100K for analysis CSV (may bump to 500K-1M if statistical tests need more samples — see Section 12), 1M for benchmark.
+- **True price**: slow Brownian motion (Gaussian step σ ≈ 1 tick per event). Updated every event. Clamped ≥ 1 tick.
+- **Event mix**: 52% ADD_LIMIT, 40% CANCEL, 8% ADD_MARKET. CANCEL→ADD_LIMIT fallback if `resting_ids_` is empty.
+- **Limit price clustering**: Gaussian offset σ ≈ 10 ticks around true price, biased to passive side (BUY below, SELL above) via `std::abs(offset)` signed by side. Most limits rest. Bid-ask bounce comes primarily from MARKET events.
+- **Quantity distribution**: exponential with mean ≈ 50, clipped to [1, 500].
+- **Inter-arrival times**: exponential with mean 1 µs per event (Poisson arrival process). 100K events → ~100 ms of simulated time.
+- **Resting-id tracking**: generator owns a `std::vector<uint64_t>` of currently-resting ids. main.cpp keeps it synced via `registerResting` / `unregisterResting` after each book operation. Swap-and-pop for O(1) removal.
+- **Default events**: 100K for analysis CSV (bumpable to 500K-1M if statistical tests need more samples — see Section 12), 1M for benchmark.
 
 ### Python / Kalman side
 - **State**: 1D (price only). 2D (price + drift) is future work.
@@ -79,41 +84,44 @@ The user explicitly evaluated and rejected:
 - **Resampling**: irregular event timestamps → uniform 1ms grid before filtering. Take last mid-price in each bin.
 - **Q and R**: hand-tuned in Day 2; R estimated from short-horizon mid-price variance, Q chosen small. EM learning is STRETCH.
 - **Baseline**: exponential smoother for comparison.
-- **Ground truth**: since data is synthetic, compare both estimators against the *known* true price. This is a deliberate methodological choice and is a **strength** of the project, not a limitation. Frame it that way in the notebook and README.
-- **Tests**: variance reduction, MSE vs ground truth, short-horizon predictive MSE, residual whiteness check.
+- **Ground truth**: synthetic data has known true price; compare both estimators against it. Strength of the project, not a limitation. Frame as a deliberate methodological advantage.
+- **Tests**: variance reduction, MSE vs ground truth, short-horizon predictive MSE, residual whiteness check (eyeball-level on the residual plot, not a formal statistical test — cut for time).
+- **Filter implementation lives in `python/kalman.py`** (pure functions: `predict`, `update`, `run_filter`). Notebook imports from it; does not redefine the algorithm. This keeps the algorithmic core in its own defensible file per Rule 3.
+- **Analysis is built incrementally in `python/analysis.ipynb` alongside the Python code** — no separate scratch-then-translate phase. Each notebook section is written as the corresponding step is done. By end of Day 2 the notebook is near-deliverable. [Added Session 6.]
 
 ### Data structures (C++)
-- **Price levels**: `std::map<int64_t, PriceLevel, std::greater<int64_t>>` for bids (descending), `std::map<int64_t, PriceLevel, std::less<int64_t>>` for asks (ascending). Each `PriceLevel` holds a FIFO `std::list<Order>` queue plus a cached `total_quantity`.
-- **Order lookup**: `std::unordered_map<uint64_t, OrderLocator>` for O(1) cancels. `OrderLocator` stores `(side, price, list iterator)` so cancels can jump directly to the order's node without searching.
-- **Matching**: price-time priority. Walk best price level, FIFO within level, walk deeper levels if liquidity insufficient.
+- **Price levels**: `std::map<int64_t, PriceLevel, std::greater<int64_t>>` for bids (descending), `std::map<int64_t, PriceLevel, std::less<int64_t>>` for asks (ascending). Each `PriceLevel` holds a FIFO `std::list<Order>` queue plus cached `total_quantity`.
+- **Order lookup**: `std::unordered_map<uint64_t, OrderLocator>` for O(1) cancels. `OrderLocator = {Side, int64_t price, list iterator}`.
+- **Matching**: price-time priority. Walk best level, FIFO within level, walk deeper levels if liquidity insufficient.
 
 ### Testing approach
-- Lightweight, no external test framework (no gtest / Catch2). Use plain `assert()` macros in `tests/test_orderbook.cpp`, compiled as a separate executable target in CMakeLists.
-- Tests cover: add limit order to empty book, add crossing limit order (immediate trade), full match, partial fill, cancel, market order with insufficient liquidity, walking the book across price levels.
-- Block 2 tests cover only the structural parts (add, cancel, query, multi-order, empty handling) since `matchOrder` is a stub. Matching-dependent tests are added in Block 3.
-- Not exhaustive — just enough to trust each piece before composing them.
+- Lightweight, no external test framework (no gtest / Catch2). Plain `assert()` macros in `tests/test_orderbook.cpp`, separate executable target.
+- 15 tests total: 6 structural (add, cancel, query, FIFO, empty handling) + 9 matching (cross/full/partial fill, multi-level walk, FIFO priority during match, market orders, SELL-side mirror).
+- Status: 15/15 passing as of end of Day 1.
 
 ### Build and tooling
 - **Build system**: CMake.
-- **Compiler**: GCC via MinGW on Windows; user is on Windows native.
-- **IDE**: VS Code with C/C++ extension, CMake Tools extension, CMake (syntax) extension.
-- **Style**: camelCase functions, snake_case variables.
+- **Compiler**: GCC 16.1.0 via MinGW-w64 (UCRT64) on Windows native.
+- **IDE**: VS Code with C/C++, CMake Tools, CMake (syntax highlighting) extensions.
+- **Python**: 3.13 with JupyterLab, NumPy, pandas, matplotlib, scipy. Deps pinned in `python/requirements.txt`.
+- **Style**: camelCase functions, snake_case local variables, camelCase struct field names (`Trade::aggressiveId`, `Trade::passiveId`), trailing-underscore for private class members.
 - **Git**: atomic commits at logical boundaries. **Push after every block.** Pull at start of every session.
 
 ### Presentation
-- **Notebook style**: mix of research notebook (motivation, hypothesis, result) and engineering walkthrough.
+- **Notebook style**: research narrative + engineering walkthrough, built incrementally during Day 2.
 - **LaTeX math** visible in the notebook for Kalman equations.
 - **Repo visibility**: private during build, public on Day 3 when polished.
 - **Final deliverable level**: Level 2 (notebook + README + plots). Level 3 (Streamlit) is STRETCH.
+- **Resumepoints.md** at repo root is private scratch (gitignored). Appended to as each block completes; final CV bullets picked from it on Day 3.
 
 ### Plots to produce
-1. Raw mid-price vs Kalman-smoothed price (time series overlay)
+1. Raw mid-price vs Kalman-smoothed price (time-series overlay)
 2. Ground truth vs Kalman vs EMA (the killer plot — only possible because synthetic)
 3. Variance reduction bar chart (raw vs EMA vs Kalman)
-4. Residual histogram (raw - smoothed) with normality test overlay
+4. Residual histogram (raw - smoothed) with eyeballed normality
 5. Predictive MSE comparison (Kalman vs EMA at different horizons)
 6. Latency histogram from C++ benchmark
-7. Throughput chart
+7. Throughput chart (or summary table — TBD which is cleaner)
 
 ---
 
@@ -123,6 +131,7 @@ The user explicitly evaluated and rejected:
 hft-orderbook-kalman/
 ├── README.md
 ├── CONTEXT.md                  ← this file
+├── Resumepoints.md             ← private scratch (gitignored)
 ├── .gitignore
 ├── LICENSE
 │
@@ -132,20 +141,20 @@ hft-orderbook-kalman/
 │   │   ├── Order.h             ← Order, Trade, Side
 │   │   ├── PriceLevel.h        ← PriceLevel struct (FIFO queue per price)
 │   │   ├── OrderBook.h         ← OrderBook class (matching engine)
-│   │   └── EventGenerator.h
+│   │   └── EventGenerator.h    ← Event struct + EventGenerator class
 │   ├── src/
 │   │   ├── OrderBook.cpp
 │   │   ├── EventGenerator.cpp
 │   │   ├── main.cpp            ← runs simulation, writes CSVs
-│   │   └── benchmark.cpp       ← throughput / latency
+│   │   └── benchmark.cpp       ← throughput / latency measurement
 │   └── tests/
 │       └── test_orderbook.cpp
 │
 ├── data/                       ← generated CSVs (gitignored)
 │
 ├── python/
-│   ├── kalman.py
-│   ├── analysis.ipynb
+│   ├── kalman.py               ← filter implementation (predict/update/run)
+│   ├── analysis.ipynb          ← incremental analysis notebook
 │   ├── requirements.txt
 │   └── plots/
 │
@@ -157,7 +166,7 @@ hft-orderbook-kalman/
 
 ## 6. The 3-day plan
 
-### Day 1 (13 hours) — C++ Order Book
+### Day 1 (13 hours) — C++ Order Book — COMPLETE
 - **Block 1 (2h):** Context, design sketch, decide event/output formats.
 - **Block 2 (3h):** Core structs (Order, PriceLevel, Trade), OrderBook class skeleton with add/cancel/query methods. Tiny correctness test.
 - **Block 3 (3h):** Matching engine — partial fills, walking the book, edge cases. Tests.
@@ -165,27 +174,36 @@ hft-orderbook-kalman/
 - **Block 5 (2h):** Benchmark binary, throughput and latency measurement.
 - **Block 6 (1h):** Buffer / cleanup / sanity check the CSVs in Python briefly.
 
-**End-of-Day-1 deliverable:** C++ engine compiles, runs, produces sane `midprices.csv` and `trades.csv`, benchmark prints throughput and latency.
+**End-of-Day-1 deliverable:** C++ engine compiles, runs, produces sane CSVs, benchmark prints throughput and latency. **DELIVERED.**
 
-[Day 1 note: Block 1 ran significantly over 2h due to toolchain setup — original MinGW.org GCC 6.3.0 install was unusable (2016, 32-bit, C++14-only) and had to be replaced with MinGW-w64 GCC 16.1.0 via MSYS2, including a PATH conflict between the two installs. CMake also had to be installed from scratch. This consumed most of Session 1.]
+[Day 1 note: Block 1 ran over due to toolchain setup — MinGW.org GCC 6.3.0 unusable, replaced with MinGW-w64 16.1.0 via MSYS2, CMake installed from scratch.]
 
-[Day 1 note: Block 2 completed across sessions 2-3. All three headers (Order.h, PriceLevel.h, OrderBook.h) written and walked through. OrderBook.cpp written with full method-by-method walkthrough. matchOrder is a stub returning incoming.quantity unchanged — real body deferred to Block 3 per Rule 3. CMakeLists.txt configured for C++17 Release builds with warnings enabled. test_orderbook.cpp written with 6 sanity tests covering structural correctness (no matching-dependent tests yet). Full build verified on System B; all 6 tests pass. Two design clarifications surfaced during walkthrough and were locked in Section 4: PriceLevel split into own header, two-method submit API instead of OrderType-on-struct.]
+[Day 1 note: Block 2 spread across sessions 2-3. Three headers + OrderBook.cpp + CMakeLists + 6 structural tests. Two design clarifications surfaced: PriceLevel split to own header, two-method submit API.]
+
+[Day 1 note: Block 3 — user wrote matchOrder. 9 matching tests added. 15/15 passing.]
+
+[Day 1 note: Block 4 done across sessions 3-5. EventGenerator + main wired up. User initially copy-pasted under fatigue; full intuitive walkthrough completed in session 6 covering Brownian price, Gaussian passive-biased limits, 52/40/8 event mix, CANCEL→LIMIT fallback, resting-id tracker, partial-fill bug fixed by isResting. User now defends the design in own words.]
+
+[Day 1 note: Block 5 — benchmark.cpp. First attempt had a real bug (pre-generation desyncing the cancel tracker, book bloated to 33K resting, throughput 0.55M). Fixed via live generation in the timed loop with selective bracketing. Final numbers: 3.46M evt/s book-only, 1.82M wall, p50 200ns, p90 500ns, p99 1µs, p99.9 2.2µs, p99.99 23µs, max 450µs, 13 resting orders steady-state.]
 
 ### Day 2 (13 hours) — Kalman Filter + Analysis
-- **Block 1 (2h):** Kalman math on paper. Predict, update, gain derivation. Hand-work a tiny example.
-- **Block 2 (2h):** Implement filter in NumPy. Unit test with known input/output.
-- **Block 3 (1.5h):** Apply to order book output. First overlay plot.
-- **Block 4 (1.5h):** Parameter selection. Estimate R from data. Try a few Q values.
-- **Block 5 (3h):** Quantitative evaluation — variance reduction, predictive MSE, ground-truth comparison, residual whiteness.
-- **Block 6 (1h):** RTS smoother (optional within Day 2).
-- **Block 7 (2h):** Plot polish, save all PNGs.
+- **Block 1 (1h):** Kalman math on paper. Predict, update, Kalman gain derivation from Bayes + Gaussian conjugacy. **USER DERIVES** per Rule 3.
+- **Block 2 (1.5h):** Implement `kalman.py` — `predict`, `update`, `run_filter`. **USER WRITES** predict/update.
+- **Block 3 (0.75h):** Notebook section: motivation + load midprices.csv + raw data viz.
+- **Block 4 (0.75h):** Notebook section: apply Kalman, first overlay plot (raw vs smoothed vs ground truth).
+- **Block 5 (0.75h):** Notebook section: parameter selection narrative (Q from prior belief, R estimated from data).
+- **Block 6 (0.75h):** Notebook section: EMA baseline + comparison.
+- **Block 7 (0.75h):** Notebook section: quantitative metrics — variance reduction, MSE vs ground truth, MSE comparison.
+- **Block 8 (1h):** Notebook section: latency histogram + benchmark numbers, conclusions.
+- **Block 9 (1h):** Plot polish, save all PNGs to `python/plots/`.
 
-**End-of-Day-2 deliverable:** All technical work done. Results computed. Plots saved.
+**End-of-Day-2 deliverable:** Notebook is near-deliverable with all sections, all plots, all numbers. README drafted with placeholders.
 
-### Day 3 (6 hours) — Polish
-- **Block 1 (3h):** Build the Jupyter notebook narrative.
-- **Block 2 (2h):** Finalize README with real numbers.
-- **Block 3 (1h):** GitHub polish — directory structure, .gitignore, clean clone test, make repo public.
+### Day 3 (3-4 hours) — Polish
+- **Block 1 (1.5h):** Final notebook prose pass.
+- **Block 2 (1h):** Final README with all numbers slotted in, design-decisions section, references.
+- **Block 3 (0.5h):** Final Resumepoints.md sweep; pick 3-5 CV bullets.
+- **Block 4 (0.5h):** GitHub polish — clean clone test, .gitignore review, make repo public.
 
 ### Stretch goals (in priority order)
 1. EM algorithm for Q, R learning (~4–6h)
@@ -193,207 +211,198 @@ hft-orderbook-kalman/
 3. Streamlit dashboard (~4–6h)
 4. ITCH parser for real data (~3–4h)
 
-Pick at most one.
+Pick at most one. User's stated deadline is "90% finish today" with cleanup tomorrow.
 
 ---
 
 ## 7. STATUS — UPDATE THIS AS YOU PROGRESS
 
 ```
-DAY:                  1
-BLOCK:                Block 2 — COMPLETE
-CURRENT STATUS:       Order book infrastructure done. Headers + OrderBook.cpp + CMakeLists + 6 passing tests on System B. matchOrder is a stub (returns incoming.quantity unchanged) — to be implemented by user in Block 3.
-LAST COMPLETED:       test_orderbook.cpp written and walked through, CMakeLists updated to include test target, project builds clean, all 6 tests pass.
-NEXT IMMEDIATE STEP:  Block 3 — write matchOrder body (USER WRITES THIS per Rule 3). Extend tests to cover crossing limits, partial fills, walking the book, market orders that actually trade.
+DAY:                  Day 1 COMPLETE / Day 2 starting
+BLOCK:                Day 2 Block 1 — Kalman math on paper (about to start)
+CURRENT STATUS:       C++ side fully done with real benchmark numbers. Python env set up (3.13, JupyterLab, NumPy/pandas/matplotlib/scipy installed via requirements.txt). Resumepoints.md created and gitignored.
+LAST COMPLETED:       Day 1 final commit (benchmark.cpp + CMakeLists + CONTEXT.md). Python dependencies installed. Resumepoints.md drafted with Day 1 content. Decision locked: notebook built incrementally alongside code, not separately.
+NEXT IMMEDIATE STEP:  Kalman math derivation on paper — user derives predict step, update step, and Kalman gain from Bayes + Gaussian conjugacy. Then implement in kalman.py.
 KNOWN ISSUES:         None.
-DEFERRED:             EventGenerator + main.cpp (Block 4). benchmark.cpp (Block 5).
-LAST PUSH:            pending — final Block 2 commit (.gitignore + CMakeLists + test_orderbook.cpp + CONTEXT.md)
+DEFERRED:             Notebook prose polish, README final, GitHub-public — Day 3.
+LAST PUSH:            done — Day 1 final commit pushed.
 ```
 
-**Update format:** Overwrite the values in place. Don't append to the file. Don't add commentary outside the block. Just keep this snapshot current.
+**Update format:** Overwrite the values in place. Don't append. Don't add commentary outside the block.
 
-**At end of every block:** update this section, then commit and push CONTEXT.md to GitHub along with any code changes. The `LAST PUSH` field tracks this.
+**At end of every block:** update this section, then commit and push CONTEXT.md along with any code changes.
 
 ---
 
 ## 8. What you may and may not modify in this document
 
-This document is a working artifact. Some sections are mutable; most are not. Follow these rules strictly.
-
-### MUTABLE — update freely when relevant
-
-- **Section 7 (STATUS)** — update at end of every work block. This is the primary mutable section.
-- **Section 12 (Open questions / TODOs)** — add items as they arise, remove when resolved.
-- **Section 13 (Resume bullet)** — fill in real numbers once measured on Day 2.
+### MUTABLE — update freely
+- **Section 7 (STATUS)** — update at end of every work block.
+- **Section 12 (Open questions / TODOs)** — add as they arise, remove when resolved.
+- **Section 13 (Resume bullet)** — fill in real numbers once measured.
 
 ### APPEND-ONLY — never rewrite, only add
+- **Section 4 (Locked design decisions)** — append confirmed new decisions with `[Added Session N: <reason>]` notes.
+- **Section 6 (3-day plan)** — note plan shifts inline as `[Day X note: ...]`, never rewrite the block.
 
-- **Section 4 (Locked design decisions)** — if the user explicitly confirms a new decision (after you've pushed back per Section 9 rule 7), append it to the relevant subsection with a note `[Added Day X: <reason>]`. Never delete or rewrite existing entries.
-- **Section 6 (3-day plan)** — if the plan shifts (e.g., a block runs over), note the shift inline as `[Day X note: actual time was Yh due to Z]` rather than rewriting the block.
-
-### IMMUTABLE — never modify under any circumstances
-
+### IMMUTABLE — never modify
 - The front-matter quote block at the top
-- **Section 1 (Who is the user)**
-- **Section 2 (The project — one paragraph)**
-- **Section 3 (Why this project)**
-- **Section 5 (Repo layout)** — if structure changes, the user will edit this themselves
-- **Section 9 (Rules of engagement)**
-- **Section 10 (When to escalate)**
-- **Section 11 (Git cheatsheet)**
-- **This Section 8 itself**
+- Section 1 (Who is the user)
+- Section 2 (The project — one paragraph)
+- Section 3 (Why this project)
+- Section 5 (Repo layout) — user edits this themselves if needed
+- Section 9 (Rules of engagement)
+- Section 10 (When to escalate)
+- Section 11 (Git cheatsheet)
+- This Section 8 itself
 
 ### If the user asks you to edit something marked IMMUTABLE
-
-Push back: *"That section is marked immutable in CONTEXT.md. If you want to change it, edit the file yourself directly rather than asking me to. That's intentional — it prevents accidental drift."* If they confirm they really want it changed, they should do it themselves outside the conversation.
+Push back: *"That section is marked immutable in CONTEXT.md. Edit the file yourself directly rather than asking me to."* If they confirm, they do it themselves.
 
 ### If you're not sure whether to edit something
-
-Default to **not editing**. Ask the user first. Drift in this document compounds badly across sessions.
+Default to **not editing**. Ask first.
 
 ### Edit hygiene
-
-- When you do edit, edit only the section asked for. Do not "improve" adjacent sections.
-- Preserve the exact heading structure (`##`, `###`) and section numbering.
-- After any edit, show the user the diff (just the changed lines, not the whole file) and ask them to confirm before they save it.
+- Edit only the section asked for. Don't "improve" adjacent sections.
+- Preserve heading structure and section numbering.
+- After any edit, show only the diff and ask confirmation before save.
 
 ---
 
 ## 9. Rules of engagement
 
-The user is leading this build. Your role is:
+1. **Implement what's been decided. Don't propose redesigns.** Explain reasoning already in this doc rather than suggesting alternatives.
 
-1. **Implement what's been decided. Don't propose redesigns.** If the user asks about a design choice already locked in Section 4, explain the reasoning that's already in this doc rather than suggesting alternatives.
+2. **Don't write large code blocks without explaining them first.** For each function: intent, algorithm, code, then walk through non-obvious lines.
 
-2. **Don't write large code blocks without explaining them first.** The user must be able to defend every line. For each function: explain the intent, the algorithm, then write the code, then walk through any non-obvious lines.
-
-3. **THE USER WRITES THE ALGORITHMIC CORE THEMSELVES.** This is the most important rule. The following functions must be written *by the user*, not by you:
-   - `OrderBook::matchOrder` (the matching loop)
+3. **THE USER WRITES THE ALGORITHMIC CORE THEMSELVES.** Most important rule.
+   - `OrderBook::matchOrder` — DONE in Block 3.
    - The Kalman `predict` step
    - The Kalman `update` step
-   - The EM updates (if the stretch goal is attempted)
+   - The EM updates (if stretch attempted)
+   For these: pseudocode, edge cases, math, review. NEVER produce finished code blocks for the user to paste.
 
-   For these, you provide: pseudocode, edge-case lists, math derivations, code review after the user writes. You do NOT produce these as finished code blocks for the user to paste. This is defensibility insurance — the user must own these specific pieces.
+4. **You can write boilerplate freely.** CMakeLists, .gitignore, CSV parsing, plotting code, struct definitions, test scaffolding, data loading, argument parsing.
 
-4. **You can write boilerplate freely.** CMakeLists, .gitignore, CSV parsing, plotting code, struct definitions, test scaffolding, data loading, argument parsing — produce these directly.
+5. **Surface tradeoffs explicitly** when two approaches are reasonable.
 
-5. **Surface tradeoffs explicitly.** When two approaches are reasonable, name both before picking. Don't silently choose.
+6. **If unsure, ask.**
 
-6. **If unsure, ask.** Don't make architectural decisions on the user's behalf. Don't invent features. If the user says "add timestamp to events" and there are three ways to do it, ask.
+7. **If user asks for something contradicting a locked decision, push back once.** If user confirms, proceed and append to Section 4.
 
-7. **If the user asks for something that contradicts a locked decision in Section 4, push back once.** "We previously locked X for reason Y — are you sure you want to change this?" If user confirms, proceed and append the change to Section 4 per the append-only rule.
+8. **End of every block, do all four of these:**
+   - Prompt user to update Section 7 (STATUS)
+   - **Append to Resumepoints.md** — new technical decisions, numbers, bullet
+     candidates, skills demonstrated. The file is private (gitignored) and
+     grows continuously. Day 3 picks final CV bullets from it. Skipping this
+     means recovering the points later from memory — much worse.
+   - **Remind user to `git add`, `git commit`, `git push`** — non-negotiable.
+     Resumepoints.md is gitignored so it won't be in the commit, but every
+     other change should be.
+   - If user hasn't pushed in last 90 min, remind mid-block.
 
-8. **At the end of every block, do all of the following:**
-   - Prompt the user to update Section 7 (STATUS)
-   - **Remind the user to `git add`, `git commit`, and `git push`** — this is non-negotiable, the user explicitly requested constant reminders. Phrase like: *"End of block. Update STATUS section in CONTEXT.md, then commit and push everything (code + CONTEXT.md) to GitHub before continuing."*
-   - If the user hasn't pushed in the last 90 minutes, remind them mid-block too
 
-9. **Stay calibrated to the user's level.** This is a 2nd year strong undergrad — don't condescend, don't over-explain CS fundamentals, but do explain microstructure and finance concepts that are new.
+9. **Stay calibrated.** 2nd-year strong undergrad — don't condescend, don't over-explain CS fundamentals, do explain microstructure and finance concepts.
 
-10. **Don't pad responses.** No "Great question!" preambles, no recap of what was just discussed, no bullet lists when prose works. The user values directness.
+10. **Don't pad responses.** No "Great question!" preambles, no recap. Be direct.
+
+11. **When the user flags a comprehension gap, treat it as the highest-priority next action.** Defensibility of code the user can't explain is zero. "I just copy-pasted this" → next session starts with a walkthrough of that code, no exceptions.
+
+12.12. **Resumepoints.md is updated at the close of every block, no exceptions.**
+    It is the running record of every technical decision worth defending and
+    every metric worth quoting. Structure of each appended block:
+      - Headline numbers (if any new ones measured this block)
+      - Technical decisions made and their justifications
+      - Skills demonstrated (with concrete details, not generic phrases)
+      - Bullet candidates if a CV-worthy claim emerged
+    The file lives at repo root, is gitignored, and survives across sessions
+    via the local filesystem. If the user has just done meaningful work and
 
 ---
 
 ## 10. When to escalate back to System A (Pro Claude)
 
-You (System B Claude) are good for code generation and known-pattern implementation. The user should return to System A for:
+Return to System A for:
+- Genuinely tricky design questions not covered in this doc
+- Math derivations beyond Kalman update (e.g., RTS smoother, EM derivation)
+- Strategic decisions ("should I attempt EM stretch or polish")
+- Anything that might contradict locked design
 
-- **Genuinely tricky design questions** that weren't covered in this doc
-- **Math derivations** beyond Kalman update (e.g., RTS smoother, EM derivation)
-- **Strategic decisions** (e.g., "should I attempt the EM stretch goal or polish further")
-- **Anything that feels like it might contradict the locked design**
-
-When the user mentions escalating, just acknowledge and let them switch. Do not try to handle questions you're unsure about.
+When user mentions escalating, acknowledge and let them switch.
 
 ---
 
 ## 11. Git cheatsheet
 
-**Daily flow (95% case):**
+**Daily flow:**
 
 ```
-# Start of session
-git pull
-
-# As you work, commit at logical boundaries
+git pull               # start of session
 git add <files>
-git commit -m "short description"
+git commit -m "..."
+git push               # end of block
+```
 
-# End of block — always push
+**git status** is the universal first move when confused.
+
+**Forgot to pull, push rejected:**
+```
+git pull --rebase
 git push
 ```
 
-**"git status" is the universal first move when confused.** Shows what's staged, modified, untracked, and which branch you're on. Run it before anything else if uncertain.
-
-**"I forgot to pull and now push is rejected":**
-
-```
-git pull --rebase    # replays your local commits on top of remote
-git push
-```
-
-If this produces a merge conflict in a file, open the file, find the `<<<<<<<` markers, edit to the version you want, save, then:
-
+If conflict, edit the file, then:
 ```
 git add <file>
 git rebase --continue
 git push
 ```
 
-**"I committed something I shouldn't have, but didn't push yet":**
-
+**Undo last commit (not yet pushed):**
 ```
-# Undo last commit, keep the file changes staged
-git reset --soft HEAD~1
-
-# Undo last commit and unstage the changes too (changes still in files)
-git reset HEAD~1
-
-# Nuke last commit and discard all changes (DANGEROUS)
-git reset --hard HEAD~1
+git reset --soft HEAD~1   # keep changes staged
+git reset HEAD~1          # keep changes unstaged
+git reset --hard HEAD~1   # DESTRUCTIVE — nuke changes
 ```
 
-**"I have uncommitted changes but need to switch machines RIGHT NOW":**
-
+**Switch machines with uncommitted changes:**
 ```
-git stash                  # saves changes aside
-git push                   # sync any committed work
-# ...switch machines, pull...
-git stash pop              # restore the in-progress changes
+git stash; git push       # save and sync committed
+# ...switch...
+git stash pop             # restore
 ```
 
-(But `stash` is local to one machine. To sync in-progress work across machines, just commit it as `WIP: <description>` and clean up later.)
+(Stash is local; to truly sync, commit as `WIP: ...` and clean up later.)
 
-**"VS Code Source Control panel markers":**
-- `U` = untracked (new file, not in Git yet)
-- `M` = modified (Git knows it, you changed it)
-- `A` = added (staged for commit)
-- `D` = deleted
-- Click the `+` next to a file to stage it. Click the checkmark at top to commit.
+**VS Code Source Control markers:** `U` untracked, `M` modified, `A` added, `D` deleted.
 
-**Cardinal rules:**
-- Run `git status` if you're confused.
+**Rules:**
+- `git status` if confused.
 - Push before switching machines. Always.
-- Push at the end of every block. Always.
-- Don't `git push --force` unless you fully understand it. (You won't need it on this project.)
+- Push at end of every block. Always.
+- Never `git push --force` here.
 
 ---
 
 ## 12. Open questions / TODOs
 
-- **Sample size for analysis CSV:** Default is 100K events. May need to bump to 500K-1M if statistical tests (residual whiteness, predictive MSE confidence intervals) need more samples. Decide on Day 2 Block 5.
-- **Synthetic generator parameter values:** True-price step variance, exact quantity distribution shape, exact price-clustering bandwidth — tune empirically on Day 1 Block 4 so the resulting CSV looks reasonable. Document final values in code comments.
+- **Sample size for analysis CSV:** Default is 100K events. May bump to 500K-1M if statistical tests need more samples. Decide on Day 2 Block 7.
+- **Synthetic generator parameter values:** σ=1 (true-price step), σ=10 (limit offset), exponential rate 0.02 (mean ≈50, clipped [1, 500]) for quantity, 1µs mean inter-arrival. May need empirical tweak if Day 2 plots look off.
 
-Add new items here as they arise. Remove items when resolved.
+Add new items here as they arise. Remove when resolved.
 
 ---
 
 ## 13. Resume bullet (target)
 
-To be finalized after Day 2 with real numbers. Working draft:
+To be finalized on Day 3 with all numbers. Working draft (Day 1 portion):
 
-> Built a C++ limit order book matching engine ([X]M events/sec, p99 [Y]ns latency) with synthetic microstructure-realistic event generation; applied Kalman filtering to extract latent mid-prices from noisy observed quotes, achieving [Z]% reduction in tick-to-tick variance and [W]× lower MSE vs ground truth compared to baseline exponential smoothing.
+> Built a C++17 limit order book matching engine sustaining 3.5M events/sec (p50 200ns, p99 1µs, p99.9 2.2µs) on synthetic microstructure-realistic flow; ...
+
+Day 2 (Kalman) portion to be appended once metrics are computed.
+
+Full menu of bullet candidates lives in private `Resumepoints.md` (gitignored).
 
 ---
 
-END OF CONTEXT.md
+END OF CONTEXT.md 
