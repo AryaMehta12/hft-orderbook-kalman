@@ -13,6 +13,8 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Source-existence checks. Fail loud at configure time instead of producing
+# confusing "no sources given to target" errors later.
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/OrderBook.cpp")
     message(FATAL_ERROR "Missing src/OrderBook.cpp")
 endif()
@@ -22,23 +24,30 @@ endif()
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
     message(FATAL_ERROR "Missing src/main.cpp")
 endif()
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark.cpp")
+    message(FATAL_ERROR "Missing src/benchmark.cpp")
+endif()
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_orderbook.cpp")
     message(FATAL_ERROR "Missing tests/test_orderbook.cpp")
 endif()
 
 include_directories(include)
 
-# Core library: OrderBook + EventGenerator. Shared by main, benchmark, tests.
+# Core library: shared compiled code used by all three executables.
 add_library(orderbook_core STATIC
     src/OrderBook.cpp
     src/EventGenerator.cpp
 )
 
-# Main simulation executable.
+# Main simulation executable — writes midprices.csv and trades.csv.
 add_executable(orderbook src/main.cpp)
 target_link_libraries(orderbook PRIVATE orderbook_core)
 
-# Sanity tests.
+# Benchmark executable — measures throughput and per-event latency.
+add_executable(benchmark src/benchmark.cpp)
+target_link_libraries(benchmark PRIVATE orderbook_core)
+
+# Test executable — 15 sanity + matching tests.
 add_executable(test_orderbook tests/test_orderbook.cpp)
 target_link_libraries(test_orderbook PRIVATE orderbook_core)
 

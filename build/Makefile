@@ -152,6 +152,19 @@ orderbook/fast:
 .PHONY : orderbook/fast
 
 #=============================================================================
+# Target rules for targets named benchmark
+
+# Build rule for target.
+benchmark: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 benchmark
+.PHONY : benchmark
+
+# fast build rule for target.
+benchmark/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\benchmark.dir\build.make CMakeFiles/benchmark.dir/build
+.PHONY : benchmark/fast
+
+#=============================================================================
 # Target rules for targets named test_orderbook
 
 # Build rule for target.
@@ -212,6 +225,30 @@ src/OrderBook.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\orderbook_core.dir\build.make CMakeFiles/orderbook_core.dir/src/OrderBook.cpp.s
 .PHONY : src/OrderBook.cpp.s
 
+src/benchmark.obj: src/benchmark.cpp.obj
+.PHONY : src/benchmark.obj
+
+# target to build an object file
+src/benchmark.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\benchmark.dir\build.make CMakeFiles/benchmark.dir/src/benchmark.cpp.obj
+.PHONY : src/benchmark.cpp.obj
+
+src/benchmark.i: src/benchmark.cpp.i
+.PHONY : src/benchmark.i
+
+# target to preprocess a source file
+src/benchmark.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\benchmark.dir\build.make CMakeFiles/benchmark.dir/src/benchmark.cpp.i
+.PHONY : src/benchmark.cpp.i
+
+src/benchmark.s: src/benchmark.cpp.s
+.PHONY : src/benchmark.s
+
+# target to generate assembly for a file
+src/benchmark.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\benchmark.dir\build.make CMakeFiles/benchmark.dir/src/benchmark.cpp.s
+.PHONY : src/benchmark.cpp.s
+
 src/main.obj: src/main.cpp.obj
 .PHONY : src/main.obj
 
@@ -269,6 +306,7 @@ help:
 	@echo ... edit_cache
 	@echo ... rebuild_cache
 	@echo ... test
+	@echo ... benchmark
 	@echo ... orderbook
 	@echo ... orderbook_core
 	@echo ... test_orderbook
@@ -278,6 +316,9 @@ help:
 	@echo ... src/OrderBook.obj
 	@echo ... src/OrderBook.i
 	@echo ... src/OrderBook.s
+	@echo ... src/benchmark.obj
+	@echo ... src/benchmark.i
+	@echo ... src/benchmark.s
 	@echo ... src/main.obj
 	@echo ... src/main.i
 	@echo ... src/main.s
